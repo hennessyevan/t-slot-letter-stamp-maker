@@ -20,6 +20,7 @@ import {
 import { DragControls } from 'three/addons/controls/DragControls.js'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { Font, STLExporter, TTFLoader } from 'three/examples/jsm/Addons.js'
+import JSZip from 'jszip'
 import { toggleFullScreen } from './helpers/fullscreen'
 import { resizeRendererToDisplaySize } from './helpers/responsiveness'
 import './style.css'
@@ -192,7 +193,37 @@ function init() {
   // ===== EXPORTER =====
   {
     exporter = new STLExporter()
-    // TODO: add export button to GUI that exports current text meshes as STLs, zips them, and downloads
+
+    async function exportMeshes() {
+      if (fontMeshes.length === 0) {
+        console.warn('No meshes to export')
+        return
+      }
+
+      const zip = new JSZip()
+
+      // Export each mesh as an STL file
+      fontMeshes.forEach((mesh, index) => {
+        const stlString = exporter.parse(mesh, { binary: false })
+        const fileName = `${textToExtrude.charAt(index) || `mesh_${index}`}.stl`
+        zip.file(fileName, stlString)
+      })
+
+      // Generate the zip file
+      const blob = await zip.generateAsync({ type: 'blob' })
+
+      // Create a download link and trigger it
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = `${textToExtrude}_stamps.zip`
+      link.click()
+
+      // Clean up the object URL
+      URL.revokeObjectURL(link.href)
+    }
+
+    // Store function for GUI access
+    ;(window as any).exportMeshes = exportMeshes
   }
 
   // ===== 👨🏻‍💼 LOADING MANAGER =====
@@ -356,8 +387,17 @@ function init() {
     }
     gui.add({ resetGui }, 'resetGui').name('RESET')
 
+    // export button
+    const exportStamps = () => {
+      ;(window as any).exportMeshes()
+    }
+    gui.add({ exportStamps }, 'exportStamps').name('📦 EXPORT STLs')
+
     gui.close()
   }
+
+  // Render initial text
+  renderText()
 }
 
 function animate() {
