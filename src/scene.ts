@@ -13,7 +13,6 @@ import {
   AxesHelper,
   Box3,
   BoxGeometry,
-  BoxHelper,
   GridHelper,
   Group,
   LoadingManager,
@@ -25,8 +24,10 @@ import {
   PointLight,
   PointLightHelper,
   Scene,
+  Vector3,
   WebGPURenderer,
 } from 'three/webgpu'
+import { requestFlexLayout } from 'troika-flex-layout'
 import { toggleFullScreen } from './helpers/fullscreen'
 import { resizeRendererToDisplaySize } from './helpers/responsiveness'
 
@@ -49,6 +50,7 @@ let pointLightHelper: PointLightHelper
 let gui: GUI
 let gridHelper: GridHelper
 let ttfLoader = new TTFLoader()
+let fontBuffer: ArrayBuffer
 let fontLoader = new FontLoader()
 let characters: Group[] = []
 let textToExtrude = 'ABCDE'
@@ -83,10 +85,12 @@ function init() {
   // ===== FONT LOADER =====
   async function renderText() {
     clearTextMeshes()
-    const TTFBuffer = await fetch('/Bookman Sans.ttf').then((res) =>
-      res.arrayBuffer(),
-    )
-    const fontData = ttfLoader.parse(TTFBuffer)
+    if (!fontBuffer) {
+      fontBuffer = await fetch('/Bookman Sans.ttf').then((res) =>
+        res.arrayBuffer(),
+      )
+    }
+    const fontData = ttfLoader.parse(fontBuffer)
     const font = fontLoader.parse(fontData)
 
     const textGeometries = textToExtrude.split('').map((char) => {
@@ -166,15 +170,13 @@ function init() {
       group.add(quadMesh)
       group.add(slotBaseMesh)
 
-      const groupBoxHelper = new BoxHelper(group, 'white')
-      group.add(groupBoxHelper)
-
       group.rotateX(-Math.PI / 2)
 
       characters.push(group)
 
       scene.add(group)
     })
+
     centerAndSpaceTextMeshes()
   }
 
@@ -186,25 +188,35 @@ function init() {
   }
 
   function centerAndSpaceTextMeshes() {
-    const totalWidth = characters.reduce((sum, mesh) => {
-      const box = new Box3().setFromObject(mesh)
-      const width = box.max.x - box.min.x
-      return sum + width
-    }, 0)
+    requestFlexLayout(
+      {
+        id: 'root',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'row',
+        children: characters.map((mesh) => {
+          const size = new Box3().setFromObject(mesh).getSize(new Vector3())
 
-    const spacing = 0.2
-    const totalSpacing = spacing * (characters.length - 1)
+          return {
+            id: mesh.uuid,
+            width: size.x + 0.2, // add some spacing  between letters
+            height: size.y,
+            children: [],
+          }
+        }),
+      },
+      (result) => {
+        characters.forEach((mesh) => {
+          const layout = Object.entries(result).find(
+            ([id]) => id === mesh.uuid,
+          )?.[1]
 
-    let startX = -((totalWidth + totalSpacing) / 2)
-
-    characters.forEach((character) => {
-      const box = new Box3().setFromObject(character)
-      const width = box.max.x - box.min.x
-
-      character.position.x = startX + width / 2
-
-      startX += width + spacing
-    })
+          if (layout) {
+            mesh.position.x = layout.left - result.root.width / 2
+          }
+        })
+      },
+    )
   }
 
   // ===== EXPORTER =====
