@@ -205,7 +205,8 @@ function init() {
       // Export each mesh as an STL file
       fontMeshes.forEach((mesh, index) => {
         const stlString = exporter.parse(mesh, { binary: false })
-        const fileName = `${textToExtrude.charAt(index) || `mesh_${index}`}.stl`
+        const char = textToExtrude.charAt(index)
+        const fileName = char ? `${char}.stl` : `letter_${index + 1}.stl`
         zip.file(fileName, stlString)
       })
 
