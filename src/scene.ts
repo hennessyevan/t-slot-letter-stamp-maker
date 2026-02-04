@@ -27,9 +27,9 @@ import {
   Scene,
   WebGPURenderer,
 } from 'three/webgpu'
-import { requestFlexLayout } from 'troika-flex-layout'
 import { toggleFullScreen } from './helpers/fullscreen'
 import { resizeRendererToDisplaySize } from './helpers/responsiveness'
+
 import './style.css'
 
 const CANVAS_ID = 'scene'
@@ -50,11 +50,12 @@ let gui: GUI
 let gridHelper: GridHelper
 let ttfLoader = new TTFLoader()
 let fontLoader = new FontLoader()
-let fontMeshes: Group[] = []
+let characters: Group[] = []
 let textToExtrude = 'ABCDE'
 let exporter: STLExporter
 
 let textDepth = 0.35
+let textHeight = 1
 let tslotHolderHeight = 1.25
 let tslotBaseDepth = 0.15
 let tslotBaseNotchHeight = 0.3
@@ -88,32 +89,25 @@ function init() {
     const fontData = ttfLoader.parse(TTFBuffer)
     const font = fontLoader.parse(fontData)
 
-    const textGeometries = textToExtrude.split('').map(
-      (char) =>
-        new TextGeometry(char, {
+    const textGeometries = textToExtrude.split('').map((char) => {
+      if (char === ' ') {
+        // create a space geometry
+        const spaceWidth = font.data.glyphs[' '].ha / 1000
+        const geometry = new BoxGeometry(spaceWidth, 0.01, 0.01)
+        return geometry
+      } else {
+        return new TextGeometry(char, {
           font,
           size: 1,
           depth: textDepth,
           curveSegments: 12,
           bevelEnabled: false,
-        }),
-    )
-
-    // set tslot holder height based on tallest letter, extending the bottom down if there are descenders
-    tslotHolderHeight = 1.25
-    textGeometries.forEach((geometry) => {
-      geometry.computeBoundingBox()
-      const bbox = geometry.boundingBox!
-      if (bbox.max.y > tslotHolderHeight) {
-        tslotHolderHeight = bbox.max.y + 0.25
-      }
-      if (bbox.min.y < 0) {
-        const descenderDepth = Math.abs(bbox.min.y)
-        if (descenderDepth + 0.25 > tslotHolderHeight - 1) {
-          tslotHolderHeight = descenderDepth + 1 + 0.25
-        }
+        })
       }
     })
+
+    // set tslot holder height based on tallest letter, extending the bottom down if there are descenders
+    tslotHolderHeight = textHeight + 0.85 + font.data.descender / 1000
 
     textGeometries.forEach((geometry, i) => {
       // trying to make a stamp so we need a box around the letter shape
@@ -123,12 +117,9 @@ function init() {
 
       const bbox = geometry.boundingBox!
 
-      // in debug mode, show the letter bounding box
-      const bboxHelper = new BoxHelper(new Mesh(geometry))
-
       const letter = new Mesh(geometry, material)
 
-      // attach the letter to a quad box that is uniform in height
+      // attach the letter to a quad box that is uniform in height, the letter should fit within this box with some padding on the top and bottom, especially for descenders
       const quadWidth = bbox.max.x - bbox.min.x
       const quadHeight = tslotHolderHeight
       const quadDepth = 0.125
@@ -138,8 +129,16 @@ function init() {
       })
       const quadMesh = new Mesh(quadGeometry, quadMaterial)
       quadMesh.position.x = (bbox.max.x + bbox.min.x) / 2
-      quadMesh.position.y = bbox.min.y + quadHeight / 2
+      quadMesh.position.y = quadHeight / 2
       quadMesh.position.z = -quadDepth / 2
+
+      // flip letter so that it is reversed for stamping
+      letter.scale.x = -1
+      // center letter geometry
+      letter.position.x = bbox.max.x + bbox.min.x
+
+      letter.position.y = quadMesh.position.y + font.data.descender / 1000
+      letter.position.z = 0.01 // slight offset to avoid z-fighting
 
       // The slot base fits into the tslot holder
       const slotBaseWidth = quadWidth
@@ -163,17 +162,16 @@ function init() {
 
       // group all meshes for this letter
       const group = new Group()
-      group.add(bboxHelper)
       group.add(letter)
       group.add(quadMesh)
+      group.add(slotBaseMesh)
 
       const groupBoxHelper = new BoxHelper(group, 'white')
       group.add(groupBoxHelper)
-      // group.add(slotBaseMesh)
 
-      // group.rotateX(-Math.PI / 2)
+      group.rotateX(-Math.PI / 2)
 
-      fontMeshes.push(group)
+      characters.push(group)
 
       scene.add(group)
     })
@@ -181,41 +179,32 @@ function init() {
   }
 
   function clearTextMeshes() {
-    fontMeshes.forEach((mesh) => {
+    characters.forEach((mesh) => {
       scene.remove(mesh)
     })
-    fontMeshes = []
+    characters = []
   }
 
   function centerAndSpaceTextMeshes() {
-    requestFlexLayout(
-      {
-        id: 'root',
-        flexDirection: 'row',
-        width: 10,
-        height: 1,
-        children: fontMeshes.map((mesh, i) => {
-          // compute bounding box to get width and height
-          const bbox = new Box3().setFromObject(mesh)
-          const width = bbox.max.x - bbox.min.x
-          const height = bbox.max.y - bbox.min.y
-          return {
-            id: mesh.uuid,
-            width,
-            height,
-            marginRight: i < fontMeshes.length - 1 ? 0.2 : 0,
-          }
-        }),
-      },
-      (result) => {
-        fontMeshes.forEach((mesh) => {
-          const layoutBox = result[mesh.uuid]!
+    const totalWidth = characters.reduce((sum, mesh) => {
+      const box = new Box3().setFromObject(mesh)
+      const width = box.max.x - box.min.x
+      return sum + width
+    }, 0)
 
-          mesh.position.x = layoutBox.left
-          mesh.position.y = layoutBox.top - tslotHolderHeight / 2
-        })
-      },
-    )
+    const spacing = 0.2
+    const totalSpacing = spacing * (characters.length - 1)
+
+    let startX = -((totalWidth + totalSpacing) / 2)
+
+    characters.forEach((character) => {
+      const box = new Box3().setFromObject(character)
+      const width = box.max.x - box.min.x
+
+      character.position.x = startX + width / 2
+
+      startX += width + spacing
+    })
   }
 
   // ===== EXPORTER =====
@@ -223,7 +212,7 @@ function init() {
     exporter = new STLExporter()
 
     async function exportMeshes() {
-      if (fontMeshes.length === 0) {
+      if (characters.length === 0) {
         console.warn('No meshes to export')
         return
       }
@@ -231,7 +220,7 @@ function init() {
       const zip = new JSZip()
 
       // Export each mesh as an STL file
-      fontMeshes.forEach((mesh, index) => {
+      characters.forEach((mesh, index) => {
         const stlString = exporter.parse(mesh, { binary: false })
         const char = textToExtrude.charAt(index)
         const fileName = char ? `${char}.stl` : `letter_${index + 1}.stl`
