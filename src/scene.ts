@@ -192,6 +192,7 @@ function init() {
   // ===== EXPORTER =====
   {
     exporter = new STLExporter()
+    // TODO: add export button to GUI that exports current text meshes as STLs, zips them, and downloads
   }
 
   // ===== 👨🏻‍💼 LOADING MANAGER =====
