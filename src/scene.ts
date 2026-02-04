@@ -3,24 +3,23 @@ import {
   AmbientLight,
   AxesHelper,
   BoxGeometry,
-  Clock,
+  ExtrudeGeometry,
   GridHelper,
   LoadingManager,
   Mesh,
-  MeshLambertMaterial,
+  MeshPhysicalMaterial,
   MeshStandardMaterial,
   PCFSoftShadowMap,
   PerspectiveCamera,
-  PlaneGeometry,
   PointLight,
   PointLightHelper,
   Scene,
-  WebGLRenderer,
-} from 'three'
+  WebGPURenderer,
+  type Shape,
+} from 'three/webgpu'
 import { DragControls } from 'three/addons/controls/DragControls.js'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import Stats from 'stats.js'
-import * as animations from './helpers/animations'
+import { Font, STLExporter, TTFLoader } from 'three/examples/jsm/Addons.js'
 import { toggleFullScreen } from './helpers/fullscreen'
 import { resizeRendererToDisplaySize } from './helpers/responsiveness'
 import './style.css'
@@ -28,20 +27,26 @@ import './style.css'
 const CANVAS_ID = 'scene'
 
 let canvas: HTMLElement
-let renderer: WebGLRenderer
+let renderer: WebGPURenderer
 let scene: Scene
 let loadingManager: LoadingManager
 let ambientLight: AmbientLight
 let pointLight: PointLight
-let cube: Mesh
+let centerPoint: Mesh
 let camera: PerspectiveCamera
 let cameraControls: OrbitControls
 let dragControls: DragControls
 let axesHelper: AxesHelper
 let pointLightHelper: PointLightHelper
-let clock: Clock
-let stats: Stats
 let gui: GUI
+let fontLoader: TTFLoader
+let font: Font
+let fontShapes: Shape[]
+let fontMeshes: Mesh[] = []
+let textToExtrude = 'ABCDE'
+let textDepth = 0.5
+let tslotHolderHeight = 1.25
+let exporter: STLExporter
 
 const animation = { enabled: true, play: true }
 
@@ -51,12 +56,142 @@ animate()
 function init() {
   // ===== 🖼️ CANVAS, RENDERER, & SCENE =====
   {
-    canvas = document.querySelector(`canvas#${CANVAS_ID}`)!
-    renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true })
+    renderer = new WebGPURenderer()
+    renderer.setSize(document.body.clientWidth, document.body.clientHeight)
+    renderer.alpha = true
+    canvas = renderer.domElement
+    canvas.id = CANVAS_ID
+    document.body.appendChild(canvas)
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     renderer.shadowMap.enabled = true
     renderer.shadowMap.type = PCFSoftShadowMap
     scene = new Scene()
+  }
+
+  // ===== FONT LOADER =====
+  async function renderText() {
+    clearTextMeshes()
+    fontLoader = new TTFLoader()
+    const data = await fontLoader.loadAsync('/Bookman Sans.ttf')
+    font = new Font(data)
+
+    fontShapes = font.generateShapes(textToExtrude, 1)
+    fontShapes.forEach((shape) => {
+      const geometry = new ExtrudeGeometry(shape, {
+        depth: textDepth,
+        bevelEnabled: false,
+      })
+
+      // trying to make a stamp so we need a box around the letter shape
+      const material = new MeshPhysicalMaterial({ color: 'white' })
+      geometry.computeBoundingBox()
+
+      const bbox = geometry.boundingBox!
+
+      const letter = new Mesh(geometry, material)
+
+      // The slot base fits into the tslot holder
+      const slotBaseWidth = bbox.max.x - bbox.min.x
+      const slotBaseHeight = tslotHolderHeight + 0.3
+      const slotBaseDepth = 0.15
+      const slotBaseGeometry = new BoxGeometry(
+        slotBaseWidth,
+        slotBaseHeight,
+        slotBaseDepth,
+      )
+      const slotBaseMaterial = new MeshPhysicalMaterial({ color: 'white' })
+      const slotBaseMesh = new Mesh(slotBaseGeometry, slotBaseMaterial)
+      slotBaseMesh.position.x = (bbox.max.x + bbox.min.x) / 2
+      slotBaseMesh.position.y = (bbox.max.y + bbox.min.y) / 2
+      slotBaseMesh.position.z = 0
+
+      // attach the letter to a quad box that is uniform in height
+      const quadWidth = bbox.max.x - bbox.min.x
+      const quadHeight = tslotHolderHeight
+      const quadDepth = 0.25
+      const quadGeometry = new BoxGeometry(quadWidth, quadHeight, quadDepth)
+      const quadMaterial = new MeshPhysicalMaterial({
+        color: 'white',
+      })
+      const quadMesh = new Mesh(quadGeometry, quadMaterial)
+      quadMesh.position.x = (bbox.max.x + bbox.min.x) / 2
+      quadMesh.position.y = (bbox.max.y + bbox.min.y) / 2
+      quadMesh.position.z = slotBaseDepth
+
+      letter.add(quadMesh)
+      letter.add(slotBaseMesh)
+      ;[slotBaseMesh, quadMesh, letter].forEach((mesh) => {
+        mesh.receiveShadow = true
+        mesh.castShadow = true
+      })
+
+      letter.rotateX(-Math.PI / 2)
+      letter.position.y += quadDepth / 2
+
+      fontMeshes.push(letter)
+
+      scene.add(letter)
+    })
+    centerTextMeshes()
+  }
+
+  function clearTextMeshes() {
+    fontMeshes.forEach((mesh) => {
+      scene.remove(mesh)
+    })
+    fontMeshes = []
+  }
+
+  function centerTextMeshes() {
+    // compute the center point of all text meshes and center them around it
+    const overallBBox = {
+      min: { x: Infinity, y: Infinity, z: Infinity },
+      max: { x: -Infinity, y: -Infinity, z: -Infinity },
+    }
+
+    fontMeshes.forEach((mesh) => {
+      mesh.geometry.computeBoundingBox()
+      const bbox = mesh.geometry.boundingBox!
+      overallBBox.min.x = Math.min(
+        overallBBox.min.x,
+        bbox.min.x + mesh.position.x,
+      )
+      // overallBBox.min.y = Math.min(
+      //   overallBBox.min.y,
+      //   bbox.min.y + mesh.position.y,
+      // )
+      overallBBox.min.z = Math.min(
+        overallBBox.min.z,
+        bbox.min.z + mesh.position.z,
+      )
+      overallBBox.max.x = Math.max(
+        overallBBox.max.x,
+        bbox.max.x + mesh.position.x,
+      )
+      // overallBBox.max.y = Math.max(
+      //   overallBBox.max.y,
+      //   bbox.max.y + mesh.position.y,
+      // )
+      overallBBox.max.z = Math.max(
+        overallBBox.max.z,
+        bbox.max.z + mesh.position.z,
+      )
+    })
+
+    const centerX = (overallBBox.min.x + overallBBox.max.x) / 2
+    // const centerY = (overallBBox.min.y + overallBBox.max.y) / 2
+    const centerZ = (overallBBox.min.z + overallBBox.max.z) / 2
+
+    fontMeshes.forEach((mesh) => {
+      mesh.position.x -= centerX
+      // mesh.position.y -= centerY
+      mesh.position.z -= centerZ
+    })
+  }
+
+  // ===== EXPORTER =====
+  {
+    exporter = new STLExporter()
   }
 
   // ===== 👨🏻‍💼 LOADING MANAGER =====
@@ -97,47 +232,31 @@ function init() {
   {
     const sideLength = 1
     const cubeGeometry = new BoxGeometry(sideLength, sideLength, sideLength)
-    const cubeMaterial = new MeshStandardMaterial({
-      color: '#f69f1f',
-      metalness: 0.5,
-      roughness: 0.7,
-    })
-    cube = new Mesh(cubeGeometry, cubeMaterial)
-    cube.castShadow = true
-    cube.position.y = 0.5
-
-    const planeGeometry = new PlaneGeometry(3, 3)
-    const planeMaterial = new MeshLambertMaterial({
-      color: 'gray',
-      emissive: 'teal',
-      emissiveIntensity: 0.2,
-      side: 2,
-      transparent: true,
-      opacity: 0.4,
-    })
-    const plane = new Mesh(planeGeometry, planeMaterial)
-    plane.rotateX(Math.PI / 2)
-    plane.receiveShadow = true
-
-    scene.add(cube)
-    scene.add(plane)
+    centerPoint = new Mesh(cubeGeometry)
+    centerPoint.castShadow = true
+    centerPoint.position.y = 0.5
   }
 
   // ===== 🎥 CAMERA =====
   {
-    camera = new PerspectiveCamera(75, canvas.clientWidth / canvas.clientHeight, 0.1, 1000)
+    camera = new PerspectiveCamera(
+      75,
+      canvas.clientWidth / canvas.clientHeight,
+      1,
+      10_000,
+    )
     camera.position.set(2, 2, 5)
   }
 
   // ===== 🕹️ CONTROLS =====
   {
     cameraControls = new OrbitControls(camera, canvas)
-    cameraControls.target = cube.position.clone()
+    cameraControls.target = centerPoint.position.clone()
     cameraControls.enableDamping = true
     cameraControls.autoRotate = false
     cameraControls.update()
 
-    dragControls = new DragControls([cube], camera, renderer.domElement)
+    dragControls = new DragControls([centerPoint], camera, renderer.domElement)
     dragControls.addEventListener('hoveron', (event) => {
       const mesh = event.object as Mesh
       const material = mesh.material as MeshStandardMaterial
@@ -179,7 +298,7 @@ function init() {
   // ===== 🪄 HELPERS =====
   {
     axesHelper = new AxesHelper(4)
-    axesHelper.visible = false
+    axesHelper.visible = true
     scene.add(axesHelper)
 
     pointLightHelper = new PointLightHelper(pointLight, undefined, 'orange')
@@ -191,48 +310,19 @@ function init() {
     scene.add(gridHelper)
   }
 
-  // ===== 📈 STATS & CLOCK =====
-  {
-    clock = new Clock()
-    stats = new Stats()
-    document.body.appendChild(stats.dom)
-  }
-
   // ==== 🐞 DEBUG GUI ====
   {
     gui = new GUI({ title: '🐞 Debug GUI', width: 300 })
 
-    const cubeOneFolder = gui.addFolder('Cube one')
-
-    cubeOneFolder.add(cube.position, 'x').min(-5).max(5).step(0.5).name('pos x')
-    cubeOneFolder
-      .add(cube.position, 'y')
-      .min(-5)
-      .max(5)
-      .step(1)
-      .name('pos y')
-      .onChange(() => (animation.play = false))
-      .onFinishChange(() => (animation.play = true))
-    cubeOneFolder.add(cube.position, 'z').min(-5).max(5).step(0.5).name('pos z')
-
-    cubeOneFolder.add(cube.material as MeshStandardMaterial, 'wireframe')
-    cubeOneFolder.addColor(cube.material as MeshStandardMaterial, 'color')
-    cubeOneFolder.add(cube.material as MeshStandardMaterial, 'metalness', 0, 1, 0.1)
-    cubeOneFolder.add(cube.material as MeshStandardMaterial, 'roughness', 0, 1, 0.1)
-
-    cubeOneFolder
-      .add(cube.rotation, 'x', -Math.PI * 2, Math.PI * 2, Math.PI / 4)
-      .name('rotate x')
-    cubeOneFolder
-      .add(cube.rotation, 'y', -Math.PI * 2, Math.PI * 2, Math.PI / 4)
-      .name('rotate y')
-      .onChange(() => (animation.play = false))
-      .onFinishChange(() => (animation.play = true))
-    cubeOneFolder
-      .add(cube.rotation, 'z', -Math.PI * 2, Math.PI * 2, Math.PI / 4)
-      .name('rotate z')
-
-    cubeOneFolder.add(animation, 'enabled').name('animated')
+    const textFolder = gui.addFolder('Text')
+    textFolder
+      .add({ text: 'ABCDE' }, 'text')
+      .name('text to extrude')
+      .onChange((value: string) => {
+        textToExtrude = value
+        clearTextMeshes()
+        renderText()
+      })
 
     const controlsFolder = gui.addFolder('Controls')
     controlsFolder.add(dragControls, 'enabled').name('drag controls')
@@ -272,12 +362,6 @@ function init() {
 function animate() {
   requestAnimationFrame(animate)
 
-  stats.begin()
-  if (animation.enabled && animation.play) {
-    animations.rotate(cube, clock, Math.PI / 3)
-    animations.bounce(cube, clock, 1, 0.5, 0.5)
-  }
-
   if (resizeRendererToDisplaySize(renderer)) {
     const canvas = renderer.domElement
     camera.aspect = canvas.clientWidth / canvas.clientHeight
@@ -287,5 +371,4 @@ function animate() {
   cameraControls.update()
 
   renderer.render(scene, camera)
-  stats.end()
 }
