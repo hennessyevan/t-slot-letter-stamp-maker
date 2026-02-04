@@ -3,7 +3,6 @@ import GUI from 'lil-gui'
 import { DragControls } from 'three/addons/controls/DragControls.js'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import {
-  Font,
   FontLoader,
   STLExporter,
   TextGeometry,
@@ -26,13 +25,12 @@ import {
   PointLight,
   PointLightHelper,
   Scene,
-  Shape,
   WebGPURenderer,
 } from 'three/webgpu'
+import { requestFlexLayout } from 'troika-flex-layout'
 import { toggleFullScreen } from './helpers/fullscreen'
 import { resizeRendererToDisplaySize } from './helpers/responsiveness'
 import './style.css'
-import { requestFlexLayout } from 'troika-flex-layout'
 
 const CANVAS_ID = 'scene'
 
@@ -52,8 +50,6 @@ let gui: GUI
 let gridHelper: GridHelper
 let ttfLoader = new TTFLoader()
 let fontLoader = new FontLoader()
-let font: Font
-let fontShapes: Shape[]
 let fontMeshes: Group[] = []
 let textToExtrude = 'ABCDE'
 let exporter: STLExporter
