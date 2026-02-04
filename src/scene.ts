@@ -1,10 +1,22 @@
+import JSZip from 'jszip'
 import GUI from 'lil-gui'
+import { DragControls } from 'three/addons/controls/DragControls.js'
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import {
+  Font,
+  FontLoader,
+  STLExporter,
+  TextGeometry,
+  TTFLoader,
+} from 'three/examples/jsm/Addons.js'
 import {
   AmbientLight,
   AxesHelper,
+  Box3,
   BoxGeometry,
-  ExtrudeGeometry,
+  BoxHelper,
   GridHelper,
+  Group,
   LoadingManager,
   Mesh,
   MeshPhysicalMaterial,
@@ -14,16 +26,13 @@ import {
   PointLight,
   PointLightHelper,
   Scene,
+  Shape,
   WebGPURenderer,
-  type Shape,
 } from 'three/webgpu'
-import { DragControls } from 'three/addons/controls/DragControls.js'
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { Font, STLExporter, TTFLoader } from 'three/examples/jsm/Addons.js'
-import JSZip from 'jszip'
 import { toggleFullScreen } from './helpers/fullscreen'
 import { resizeRendererToDisplaySize } from './helpers/responsiveness'
 import './style.css'
+import { requestFlexLayout } from 'troika-flex-layout'
 
 const CANVAS_ID = 'scene'
 
@@ -40,14 +49,19 @@ let dragControls: DragControls
 let axesHelper: AxesHelper
 let pointLightHelper: PointLightHelper
 let gui: GUI
-let fontLoader: TTFLoader
+let gridHelper: GridHelper
+let ttfLoader = new TTFLoader()
+let fontLoader = new FontLoader()
 let font: Font
 let fontShapes: Shape[]
-let fontMeshes: Mesh[] = []
+let fontMeshes: Group[] = []
 let textToExtrude = 'ABCDE'
-let textDepth = 0.5
-let tslotHolderHeight = 1.25
 let exporter: STLExporter
+
+let textDepth = 0.35
+let tslotHolderHeight = 1.25
+let tslotBaseDepth = 0.15
+let tslotBaseNotchHeight = 0.3
 
 const animation = { enabled: true, play: true }
 
@@ -72,68 +86,102 @@ function init() {
   // ===== FONT LOADER =====
   async function renderText() {
     clearTextMeshes()
-    fontLoader = new TTFLoader()
-    const data = await fontLoader.loadAsync('/Bookman Sans.ttf')
-    font = new Font(data)
+    const TTFBuffer = await fetch('/Bookman Sans.ttf').then((res) =>
+      res.arrayBuffer(),
+    )
+    const fontData = ttfLoader.parse(TTFBuffer)
+    const font = fontLoader.parse(fontData)
 
-    fontShapes = font.generateShapes(textToExtrude, 1)
-    fontShapes.forEach((shape) => {
-      const geometry = new ExtrudeGeometry(shape, {
-        depth: textDepth,
-        bevelEnabled: false,
-      })
+    const textGeometries = textToExtrude.split('').map(
+      (char) =>
+        new TextGeometry(char, {
+          font,
+          size: 1,
+          depth: textDepth,
+          curveSegments: 12,
+          bevelEnabled: false,
+        }),
+    )
 
+    // set tslot holder height based on tallest letter, extending the bottom down if there are descenders
+    tslotHolderHeight = 1.25
+    textGeometries.forEach((geometry) => {
+      geometry.computeBoundingBox()
+      const bbox = geometry.boundingBox!
+      if (bbox.max.y > tslotHolderHeight) {
+        tslotHolderHeight = bbox.max.y + 0.25
+      }
+      if (bbox.min.y < 0) {
+        const descenderDepth = Math.abs(bbox.min.y)
+        if (descenderDepth + 0.25 > tslotHolderHeight - 1) {
+          tslotHolderHeight = descenderDepth + 1 + 0.25
+        }
+      }
+    })
+
+    textGeometries.forEach((geometry, i) => {
       // trying to make a stamp so we need a box around the letter shape
       const material = new MeshPhysicalMaterial({ color: 'white' })
       geometry.computeBoundingBox()
+      geometry.name = 'LetterGeometry - ' + textToExtrude.charAt(i - 1)
 
       const bbox = geometry.boundingBox!
 
+      // in debug mode, show the letter bounding box
+      const bboxHelper = new BoxHelper(new Mesh(geometry))
+
       const letter = new Mesh(geometry, material)
 
+      // attach the letter to a quad box that is uniform in height
+      const quadWidth = bbox.max.x - bbox.min.x
+      const quadHeight = tslotHolderHeight
+      const quadDepth = 0.125
+      const quadGeometry = new BoxGeometry(quadWidth, quadHeight, quadDepth)
+      const quadMaterial = new MeshPhysicalMaterial({
+        color: 'pink',
+      })
+      const quadMesh = new Mesh(quadGeometry, quadMaterial)
+      quadMesh.position.x = (bbox.max.x + bbox.min.x) / 2
+      quadMesh.position.y = bbox.min.y + quadHeight / 2
+      quadMesh.position.z = -quadDepth / 2
+
       // The slot base fits into the tslot holder
-      const slotBaseWidth = bbox.max.x - bbox.min.x
-      const slotBaseHeight = tslotHolderHeight + 0.3
-      const slotBaseDepth = 0.15
+      const slotBaseWidth = quadWidth
+      const slotBaseHeight = tslotBaseNotchHeight + quadHeight
+      const slotBaseDepth = tslotBaseDepth
       const slotBaseGeometry = new BoxGeometry(
         slotBaseWidth,
         slotBaseHeight,
         slotBaseDepth,
       )
-      const slotBaseMaterial = new MeshPhysicalMaterial({ color: 'white' })
+      const slotBaseMaterial = new MeshPhysicalMaterial({ color: 'cyan' })
       const slotBaseMesh = new Mesh(slotBaseGeometry, slotBaseMaterial)
       slotBaseMesh.position.x = (bbox.max.x + bbox.min.x) / 2
-      slotBaseMesh.position.y = (bbox.max.y + bbox.min.y) / 2
-      slotBaseMesh.position.z = 0
-
-      // attach the letter to a quad box that is uniform in height
-      const quadWidth = bbox.max.x - bbox.min.x
-      const quadHeight = tslotHolderHeight
-      const quadDepth = 0.25
-      const quadGeometry = new BoxGeometry(quadWidth, quadHeight, quadDepth)
-      const quadMaterial = new MeshPhysicalMaterial({
-        color: 'white',
-      })
-      const quadMesh = new Mesh(quadGeometry, quadMaterial)
-      quadMesh.position.x = (bbox.max.x + bbox.min.x) / 2
-      quadMesh.position.y = (bbox.max.y + bbox.min.y) / 2
-      quadMesh.position.z = slotBaseDepth
-
-      letter.add(quadMesh)
-      letter.add(slotBaseMesh)
+      slotBaseMesh.position.y = quadMesh.position.y
+      slotBaseMesh.position.z =
+        quadMesh.position.z - (quadDepth + slotBaseDepth) / 2
       ;[slotBaseMesh, quadMesh, letter].forEach((mesh) => {
         mesh.receiveShadow = true
         mesh.castShadow = true
       })
 
-      letter.rotateX(-Math.PI / 2)
-      letter.position.y += quadDepth / 2
+      // group all meshes for this letter
+      const group = new Group()
+      group.add(bboxHelper)
+      group.add(letter)
+      group.add(quadMesh)
 
-      fontMeshes.push(letter)
+      const groupBoxHelper = new BoxHelper(group, 'white')
+      group.add(groupBoxHelper)
+      // group.add(slotBaseMesh)
 
-      scene.add(letter)
+      // group.rotateX(-Math.PI / 2)
+
+      fontMeshes.push(group)
+
+      scene.add(group)
     })
-    centerTextMeshes()
+    centerAndSpaceTextMeshes()
   }
 
   function clearTextMeshes() {
@@ -143,51 +191,35 @@ function init() {
     fontMeshes = []
   }
 
-  function centerTextMeshes() {
-    // compute the center point of all text meshes and center them around it
-    const overallBBox = {
-      min: { x: Infinity, y: Infinity, z: Infinity },
-      max: { x: -Infinity, y: -Infinity, z: -Infinity },
-    }
+  function centerAndSpaceTextMeshes() {
+    requestFlexLayout(
+      {
+        id: 'root',
+        flexDirection: 'row',
+        width: 10,
+        height: 1,
+        children: fontMeshes.map((mesh, i) => {
+          // compute bounding box to get width and height
+          const bbox = new Box3().setFromObject(mesh)
+          const width = bbox.max.x - bbox.min.x
+          const height = bbox.max.y - bbox.min.y
+          return {
+            id: mesh.uuid,
+            width,
+            height,
+            marginRight: i < fontMeshes.length - 1 ? 0.2 : 0,
+          }
+        }),
+      },
+      (result) => {
+        fontMeshes.forEach((mesh) => {
+          const layoutBox = result[mesh.uuid]!
 
-    fontMeshes.forEach((mesh) => {
-      mesh.geometry.computeBoundingBox()
-      const bbox = mesh.geometry.boundingBox!
-      overallBBox.min.x = Math.min(
-        overallBBox.min.x,
-        bbox.min.x + mesh.position.x,
-      )
-      // overallBBox.min.y = Math.min(
-      //   overallBBox.min.y,
-      //   bbox.min.y + mesh.position.y,
-      // )
-      overallBBox.min.z = Math.min(
-        overallBBox.min.z,
-        bbox.min.z + mesh.position.z,
-      )
-      overallBBox.max.x = Math.max(
-        overallBBox.max.x,
-        bbox.max.x + mesh.position.x,
-      )
-      // overallBBox.max.y = Math.max(
-      //   overallBBox.max.y,
-      //   bbox.max.y + mesh.position.y,
-      // )
-      overallBBox.max.z = Math.max(
-        overallBBox.max.z,
-        bbox.max.z + mesh.position.z,
-      )
-    })
-
-    const centerX = (overallBBox.min.x + overallBBox.max.x) / 2
-    // const centerY = (overallBBox.min.y + overallBBox.max.y) / 2
-    const centerZ = (overallBBox.min.z + overallBBox.max.z) / 2
-
-    fontMeshes.forEach((mesh) => {
-      mesh.position.x -= centerX
-      // mesh.position.y -= centerY
-      mesh.position.z -= centerZ
-    })
+          mesh.position.x = layoutBox.left
+          mesh.position.y = layoutBox.top - tslotHolderHeight / 2
+        })
+      },
+    )
   }
 
   // ===== EXPORTER =====
@@ -216,7 +248,7 @@ function init() {
       // Create a download link and trigger it
       const link = document.createElement('a')
       link.href = URL.createObjectURL(blob)
-      link.download = `${textToExtrude}_stamps.zip`
+      link.download = `stamps.zip`
       link.click()
 
       // Clean up the object URL
@@ -248,8 +280,8 @@ function init() {
 
   // ===== 💡 LIGHTS =====
   {
-    ambientLight = new AmbientLight('white', 0.4)
-    pointLight = new PointLight('white', 20, 100)
+    ambientLight = new AmbientLight('white', 1)
+    pointLight = new PointLight('white', 30, 100)
     pointLight.position.set(-2, 2, 2)
     pointLight.castShadow = true
     pointLight.shadow.radius = 4
@@ -338,38 +370,34 @@ function init() {
     pointLightHelper.visible = false
     scene.add(pointLightHelper)
 
-    const gridHelper = new GridHelper(20, 20, 'teal', 'darkgray')
+    gridHelper = new GridHelper(20, 20, 'teal', 'darkgray')
     gridHelper.position.y = -0.01
     scene.add(gridHelper)
   }
 
   // ==== 🐞 DEBUG GUI ====
   {
-    gui = new GUI({ title: '🐞 Debug GUI', width: 300 })
+    gui = new GUI({ title: 'CONTROLS', width: 300 })
 
     const textFolder = gui.addFolder('Text')
     textFolder
-      .add({ text: 'ABCDE' }, 'text')
+      .add({ text: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ&. ' }, 'text')
       .name('text to extrude')
       .onChange((value: string) => {
         textToExtrude = value
-        clearTextMeshes()
         renderText()
       })
 
-    const controlsFolder = gui.addFolder('Controls')
-    controlsFolder.add(dragControls, 'enabled').name('drag controls')
-
-    const lightsFolder = gui.addFolder('Lights')
-    lightsFolder.add(pointLight, 'visible').name('point light')
-    lightsFolder.add(ambientLight, 'visible').name('ambient light')
+    textFolder
+      .add({ depth: textDepth }, 'depth', 0.1, 1, 0.05)
+      .name('text depth (mm)')
+      .onChange((value: number) => {
+        textDepth = value
+        renderText()
+      })
 
     const helpersFolder = gui.addFolder('Helpers')
     helpersFolder.add(axesHelper, 'visible').name('axes')
-    helpersFolder.add(pointLightHelper, 'visible').name('pointLight')
-
-    const cameraFolder = gui.addFolder('Camera')
-    cameraFolder.add(cameraControls, 'autoRotate')
 
     // persist GUI state in local storage on changes
     gui.onFinishChange(() => {
@@ -385,6 +413,7 @@ function init() {
     const resetGui = () => {
       localStorage.removeItem('guiState')
       gui.reset()
+      renderText()
     }
     gui.add({ resetGui }, 'resetGui').name('RESET')
 
@@ -393,12 +422,7 @@ function init() {
       ;(window as any).exportMeshes()
     }
     gui.add({ exportStamps }, 'exportStamps').name('📦 EXPORT STLs')
-
-    gui.close()
   }
-
-  // Render initial text
-  renderText()
 }
 
 function animate() {
@@ -412,5 +436,5 @@ function animate() {
 
   cameraControls.update()
 
-  renderer.render(scene, camera)
+  renderer.renderAsync(scene, camera)
 }
