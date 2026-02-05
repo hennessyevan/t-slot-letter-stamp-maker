@@ -5,6 +5,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import {
   FontLoader,
   STLExporter,
+  SVGLoader,
   TextGeometry,
   TTFLoader,
 } from 'three/examples/jsm/Addons.js'
@@ -13,6 +14,7 @@ import {
   AxesHelper,
   Box3,
   BoxGeometry,
+  ExtrudeGeometry,
   GridHelper,
   Group,
   LoadingManager,
@@ -56,11 +58,20 @@ let characters: Group[] = []
 let textToExtrude = 'ABCDE'
 let exporter: STLExporter
 
+let tSlot: Mesh
+
+let svgLoader = new SVGLoader()
+
 let textDepth = 0.35
 let textHeight = 1
-let tslotHolderHeight = 1.25
+
+let quadHeight = 1.25
+let quadDepth = 0.125
+
+let tolerance = 0.015
 let tslotBaseDepth = 0.15
 let tslotBaseNotchHeight = 0.3
+let tslotLength = 3
 
 const animation = { enabled: true, play: true }
 
@@ -111,7 +122,7 @@ function init() {
     })
 
     // set tslot holder height based on tallest letter, extending the bottom down if there are descenders
-    tslotHolderHeight = textHeight + 0.85 + font.data.descender / 1000
+    quadHeight = textHeight + 0.85 + font.data.descender / 1000
 
     textGeometries.forEach((geometry, i) => {
       // trying to make a stamp so we need a box around the letter shape
@@ -125,11 +136,9 @@ function init() {
 
       // attach the letter to a quad box that is uniform in height, the letter should fit within this box with some padding on the top and bottom, especially for descenders
       const quadWidth = bbox.max.x - bbox.min.x
-      const quadHeight = tslotHolderHeight
-      const quadDepth = 0.125
       const quadGeometry = new BoxGeometry(quadWidth, quadHeight, quadDepth)
       const quadMaterial = new MeshPhysicalMaterial({
-        color: 'pink',
+        color: 'white',
       })
       const quadMesh = new Mesh(quadGeometry, quadMaterial)
       quadMesh.position.x = (bbox.max.x + bbox.min.x) / 2
@@ -142,7 +151,6 @@ function init() {
       letter.position.x = bbox.max.x + bbox.min.x
 
       letter.position.y = quadMesh.position.y + font.data.descender / 1000
-      letter.position.z = 0.01 // slight offset to avoid z-fighting
 
       // The slot base fits into the tslot holder
       const slotBaseWidth = quadWidth
@@ -153,7 +161,7 @@ function init() {
         slotBaseHeight,
         slotBaseDepth,
       )
-      const slotBaseMaterial = new MeshPhysicalMaterial({ color: 'cyan' })
+      const slotBaseMaterial = new MeshPhysicalMaterial({ color: 'white' })
       const slotBaseMesh = new Mesh(slotBaseGeometry, slotBaseMaterial)
       slotBaseMesh.position.x = (bbox.max.x + bbox.min.x) / 2
       slotBaseMesh.position.y = quadMesh.position.y
@@ -166,6 +174,7 @@ function init() {
 
       // group all meshes for this letter
       const group = new Group()
+      group.name = textToExtrude.charAt(i)
       group.add(letter)
       group.add(quadMesh)
       group.add(slotBaseMesh)
@@ -178,9 +187,65 @@ function init() {
     })
 
     centerAndSpaceTextMeshes()
+
+    renderTSlotHolder()
+  }
+
+  function renderTSlotHolder() {
+    let tslotWallThickness = 0.1
+    let addedDepthForHolder = 0.1
+    let tslotTotalDepth =
+      tslotBaseDepth + quadDepth + tslotWallThickness + addedDepthForHolder
+    let tslotTotalHeight =
+      tslotWallThickness * 2 + tslotBaseNotchHeight + quadHeight
+
+    tslotTotalHeight += tolerance
+    tslotTotalDepth += tolerance
+    tslotTotalDepth += tolerance
+
+    const svg = `
+    <svg viewBox="0 0 2 ${tslotTotalDepth}">
+  <path d="
+M 0 0
+v ${tslotTotalDepth}
+h ${tslotTotalHeight}
+v ${tslotTotalDepth * -1}
+h ${(tslotBaseNotchHeight / 2 + tslotWallThickness) * -1}
+v ${quadDepth + tolerance}
+h ${tslotBaseNotchHeight / 2}
+v ${tslotBaseDepth}
+h ${(tslotTotalHeight - tslotWallThickness * 2) * -1}
+v ${tslotBaseDepth * -1}
+h ${tslotBaseNotchHeight / 2}
+v ${(quadDepth + tolerance) * -1}
+h ${(tslotWallThickness + tslotBaseNotchHeight / 2) * -1}
+z" />
+</svg>
+    `
+
+    const svgData = svgLoader.parse(svg)
+    const shape = svgData.paths[0].toShapes(true)
+
+    const geometry = new ExtrudeGeometry(shape, {
+      bevelEnabled: false,
+      depth: tslotLength,
+    })
+    const material = new MeshPhysicalMaterial({
+      color: 'white',
+    })
+    const mesh = new Mesh(geometry, material)
+    mesh.rotateX(-Math.PI / 2)
+    mesh.position.y = 0
+    mesh.position.z = -2
+    mesh.receiveShadow = true
+
+    tSlot = mesh
+    scene.add(mesh)
   }
 
   function clearTextMeshes() {
+    scene.remove(tSlot)
+
     characters.forEach((mesh) => {
       scene.remove(mesh)
     })
@@ -390,6 +455,23 @@ function init() {
       .name('text depth (mm)')
       .onChange((value: number) => {
         textDepth = value
+        renderText()
+      })
+
+    const dimensionsFolder = gui.addFolder('Dimensions')
+    dimensionsFolder
+      .add({ height: textHeight }, 'height', 0.5, 3, 0.05)
+      .name('letter height (mm)')
+      .onChange((value: number) => {
+        textHeight = value
+        renderText()
+      })
+
+    dimensionsFolder
+      .add({ tolerance: tolerance }, 'tolerance', 0, 0.05, 0.001)
+      .name('tslot tolerance (mm)')
+      .onChange((value: number) => {
+        tolerance = value
         renderText()
       })
 
