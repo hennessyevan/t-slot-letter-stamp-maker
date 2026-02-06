@@ -51,6 +51,8 @@ let axesHelper: AxesHelper
 let pointLightHelper: PointLightHelper
 let gui: GUI
 let gridHelper: GridHelper
+
+let fontName = 'Courier Prime'
 let ttfLoader = new TTFLoader()
 let fontBuffer: ArrayBuffer
 let fontLoader = new FontLoader()
@@ -97,7 +99,7 @@ function init() {
   async function renderText() {
     clearTextMeshes()
     if (!fontBuffer) {
-      fontBuffer = await fetch('/Bookman Sans.ttf').then((res) =>
+      fontBuffer = await fetch(`/${fontName}.ttf`).then((res) =>
         res.arrayBuffer(),
       )
     }
@@ -121,8 +123,25 @@ function init() {
       }
     })
 
+    const getDescenderHeightFromFont = (font: any) => {
+      let minDescender = 0
+      for (const char of textToExtrude) {
+        const glyph = font.data.glyphs[char]
+        if (glyph && glyph.o) {
+          const descender = glyph.o.split(' ')[3] // crude way to get descender from path data
+          if (descender) {
+            const descenderValue = parseInt(descender)
+            if (descenderValue < minDescender) {
+              minDescender = descenderValue
+            }
+          }
+        }
+      }
+      return minDescender / 1000
+    }
+
     // set tslot holder height based on tallest letter, extending the bottom down if there are descenders
-    quadHeight = textHeight + 0.85 + font.data.descender / 1000
+    quadHeight = textHeight + 0.85 + getDescenderHeightFromFont(font)
 
     textGeometries.forEach((geometry, i) => {
       // trying to make a stamp so we need a box around the letter shape
@@ -458,6 +477,30 @@ z" />
         renderText()
       })
 
+    const fontFamilyButton = textFolder
+      .add(
+        {
+          loadFile: () => {
+            document.getElementById('fontFamilyInput')!.click()
+          },
+        },
+        'loadFile',
+      )
+      .name(`font family (${fontName})`)
+
+    ;(
+      document.getElementById('fontFamilyInput')! as HTMLInputElement
+    ).addEventListener('change', async (event) => {
+      const input = event.target as HTMLInputElement
+      if (input.files && input.files[0]) {
+        const file = input.files[0]
+        fontBuffer = await file.arrayBuffer()
+        fontName = file.name.replace('.ttf', '')
+        fontFamilyButton.name(`font family (${fontName})`)
+        renderText()
+      }
+    })
+
     const dimensionsFolder = gui.addFolder('Dimensions')
     dimensionsFolder
       .add({ height: textHeight }, 'height', 0.5, 3, 0.05)
@@ -472,6 +515,14 @@ z" />
       .name('tslot tolerance (mm)')
       .onChange((value: number) => {
         tolerance = value
+        renderText()
+      })
+
+    dimensionsFolder
+      .add({ tslotLength: tslotLength }, 'tslotLength', 1, 10, 0.1)
+      .name('tslot length (mm)')
+      .onChange((value: number) => {
+        tslotLength = value
         renderText()
       })
 
