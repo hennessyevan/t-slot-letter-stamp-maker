@@ -1,8 +1,9 @@
 {
-  "name": "threejs-starter-vite",
+  "name": "t-slot-letter-stamp-maker",
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "description": "A tool for creating letter stamps and T-Slot holder for 3d printing.",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
